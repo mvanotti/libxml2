@@ -8,6 +8,32 @@
 
 #include "libxml.h"
 
+#define FUZZING
+#ifdef FUZZING
+// changes for persitent-mode fuzzing
+
+/* this lets the source compile without afl-clang-fast/lto */
+#ifndef __AFL_FUZZ_TESTCASE_LEN
+
+ssize_t       fuzz_len;
+unsigned char fuzz_buf[1024000];
+
+  #define __AFL_FUZZ_TESTCASE_LEN fuzz_len
+  #define __AFL_FUZZ_TESTCASE_BUF fuzz_buf
+  #define __AFL_FUZZ_INIT() void sync(void);
+  #define __AFL_LOOP(x) \
+    ((fuzz_len = read(0, fuzz_buf, sizeof(fuzz_buf))) > 0 ? 1 : 0)
+  #define __AFL_INIT() sync()
+
+#endif
+
+// The input pointer
+static unsigned char *afl_testcase_buf;
+static int afl_testcase_len;
+
+__AFL_FUZZ_INIT()
+#endif //FUZZING
+
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -2308,6 +2334,17 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
                 xmlFreeParserCtxt(ctxt);
 #ifdef HAVE_MMAP
 	} else if (memory) {
+
+#ifdef FUZZING
+	    if (rectxt == NULL)
+			doc = xmlReadMemory((char *) afl_testcase_buf, afl_testcase_len,
+		                    filename, NULL, options);
+		else
+			doc = xmlCtxtReadMemory(rectxt, (char *) afl_testcase_buf, afl_testcase_len,
+			                filename, NULL, options);
+
+#else
+
 	    int fd;
 	    struct stat info;
 	    const char *base;
@@ -2332,6 +2369,7 @@ static void parseAndPrintFile(char *filename, xmlParserCtxtPtr rectxt) {
 
 	    munmap((char *) base, info.st_size);
 	    close(fd);
+#endif // FUZZING
 #endif
 #ifdef LIBXML_VALID_ENABLED
 	} else if (valid) {
@@ -3106,8 +3144,31 @@ static void deregisterNode(xmlNodePtr node)
     nbregister--;
 }
 
+
 int
-main(int argc, char **argv) {
+main(int argc, char** argv) {
+
+#ifdef FUZZING
+  // We fuzz push mode as that way fopen is handled in this file.
+  memory++;
+
+  __AFL_INIT();
+  afl_testcase_buf = __AFL_FUZZ_TESTCASE_BUF;
+
+  while (__AFL_LOOP(UINT_MAX)) {
+	afl_testcase_len = __AFL_FUZZ_TESTCASE_LEN;
+    parseAndPrintFile((char *)"memory", NULL);
+  }
+
+  return 0;
+
+}
+
+int
+old_main(int argc, char **argv) {
+
+#endif // FUZZING
+
     int i, acount;
     int files = 0;
     int version = 0;
